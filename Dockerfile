@@ -26,6 +26,11 @@ RUN apt-get update && apt-get install -y \
     libmail-imapclient-perl libuuid-tiny-perl locales \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Latex and related tools    
+RUN apt-get update && apt-get install -y texlive-base-bin texlive-latex-recommended texlive-fonts-recommended \
+    texlive-latex-extra texlive-lang-german ghostscript latexmk
+
+
 # Set locale
 RUN sed -i '/de_DE.UTF-8/s/^# //g' /etc/locale.gen && \
     locale-gen
@@ -36,7 +41,8 @@ ENV LC_ALL de_DE.UTF-8
 WORKDIR /opt
 
 # Clone kivitendo
-RUN git clone --depth 1 https://github.com/kivitendo/kivitendo-erp.git
+RUN git clone --depth 1 --branch release-3.9.2 https://github.com/kivitendo/kivitendo-erp.git
+
 
 WORKDIR /opt/kivitendo-erp
 

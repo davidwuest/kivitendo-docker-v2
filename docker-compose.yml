@@ -19,12 +19,17 @@ services:
     depends_on:
       - db
     ports:
-      - "80:80"
+      - "82:80"
     environment:
       DB_HOST: db
       DB_USER: kivitendo
       DB_PASSWORD: kivitendo
       DB_NAME: kivitendo
+
+    volumes:
+      - webdav:/opt/kivitendo-erp/webdav
+      - ./druckvorlagen:/opt/kivitendo-erp/templates/cvs
+
     networks:
       - kivitendo-net
     # Uncomment the following if you want the container to restart automatically
@@ -32,6 +37,7 @@ services:
 
 volumes:
   db_data:
+  webdav:
 
 networks:
   kivitendo-net:

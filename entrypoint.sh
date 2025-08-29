@@ -10,6 +10,8 @@ fi
 
 chown -R www-data users spool webdav
 
+chown -R www-data templates
+
 echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
 # Starte Apache im Vordergrund
