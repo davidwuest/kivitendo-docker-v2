@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y \
     libexception-class-perl libxml-libxml-perl libtry-tiny-perl \
     libmath-round-perl libimager-perl libimager-qrcode-perl \
     librest-client-perl libipc-run-perl libencode-imaputf7-perl \
-    libmail-imapclient-perl libuuid-tiny-perl locales \
+    libmail-imapclient-perl libuuid-tiny-perl libcryptx-perl locales \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Latex and related tools    
@@ -41,7 +41,7 @@ ENV LC_ALL de_DE.UTF-8
 WORKDIR /opt
 
 # Clone kivitendo
-RUN git clone --depth 1 --branch release-3.9.2 https://github.com/kivitendo/kivitendo-erp.git
+RUN git clone --depth 1 --branch release-3.9.2 https://github.com/davidwuest/kivitendo-erp.git
 
 
 WORKDIR /opt/kivitendo-erp
