@@ -1,9 +1,9 @@
-version: "3.9"
-
 services:
   db:
     image: postgres:13
     container_name: kivitendo-db
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: kivitendo
       POSTGRES_PASSWORD: kivitendo
