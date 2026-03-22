@@ -1,1 +1,1 @@
-#  Repository for developing Kivitendo with NEON Database and Docker.
+# Repository for Kivitendo with Docker.
