@@ -23,8 +23,11 @@ services:
     ports:
       - "82:80"
     # The database backend and connection come from ./.env (see .env.*.example).
-    # The entrypoint applies local defaults when DB_BACKEND=postgres and renders
-    # kivitendo.conf from these values.
+    # env_file passes ALL .env variables into the container, so any KIVI_* config
+    # override (KIVI_<SECTION>__<KEY>) reaches the entrypoint too. The explicit
+    # DB_* block below documents the expected vars and supplies defaults.
+    env_file:
+      - .env
     environment:
       DB_BACKEND: ${DB_BACKEND:-postgres}
       DB_HOST: ${DB_HOST:-}

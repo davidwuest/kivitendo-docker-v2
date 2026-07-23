@@ -6,3 +6,5 @@ dev/
 
 # Active local config with secrets. Templates (.env.*.example) ARE committed.
 .env
+CLAUDE.md
+.gitignore
