@@ -61,15 +61,20 @@ sub _connect {
 
   # Neon scale-to-zero: the compute may be suspended and take several seconds to
   # wake. Retry a handful of times so a cold start is tolerated, not thrown.
+  # Do NOT retry permanent errors (missing database/role, auth failure) — those
+  # are definitive answers, e.g. the auth database not existing before setup.
   my ($dbh, $err);
   for my $try (1 .. 5) {
     $dbh = eval { $do_connect->() };
-    $err = $@;
+    # $@ is only set when RaiseError dies; DBI->connect otherwise returns undef
+    # and reports via $DBI::errstr. Use both so permanent errors are detected.
+    $err = $@ || $DBI::errstr || '';
     last if $dbh;
+    last if $err =~ /does not exist|authentication failed|no pg_hba|role ".*" does not/i;
     $::lxdebug->message(0, "Neon DB connect attempt $try failed, retrying in 3s: $err") if $::lxdebug;
     sleep 3;
   }
-  die $err if !$dbh && $err;
+  die $@ if !$dbh && $@;   # preserve RaiseError-vs-undef semantics for callers
   return $dbh;
 }
 PERL
@@ -198,6 +203,33 @@ PERL
             or die "SL::Auth::dbconnect Neon ping patch: cached-dbh guard not found\n";
         spew($file, $src);
         print "SL::Auth::dbconnect Neon ping patch: applied\n";
+    }
+}
+
+# --- Patch 7: create the AUTH database from template0 on Neon ---------------
+# SL::Auth::create_database (admin "create auth database" step) uses the
+# db_template value from the form, which defaults to template1. On Neon
+# template1 always has a live session, so CREATE DATABASE ... TEMPLATE template1
+# fails. Force template0 for Neon hosts (same reasoning as patch 4 for client
+# databases). Gated on *.neon.tech.
+{
+    my $file = '/opt/kivitendo-erp/SL/Auth.pm';
+    my $src  = slurp($file);
+
+    if ($src =~ /Neon: force template0/) {
+        print "SL::Auth::create_database template0 patch: already present\n";
+    } else {
+        my $replacement = <<'PERL';
+  $params{template} = 'template0'   # Neon: force template0 (template1 is busy)
+    if $cfg->{host} && $cfg->{host} =~ /\.neon\.tech/;
+
+  my $dsn = 'dbi:Pg:dbname=template1;host=' . $cfg->{host};
+PERL
+        chomp $replacement;
+        $src =~ s{  my \$dsn = 'dbi:Pg:dbname=template1;host=' \. \$cfg->\{host\};}{$replacement}
+            or die "SL::Auth::create_database template0 patch: create_database DSN not found\n";
+        spew($file, $src);
+        print "SL::Auth::create_database template0 patch: applied\n";
     }
 }
 
