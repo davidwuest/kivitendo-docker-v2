@@ -1,9 +1,32 @@
-FROM debian:bullseye
+# syntax=docker/dockerfile:1
+
+########################################
+# Stage 1: fetch kivitendo source
+# git lives only here, never in the final image (~96 MB saved)
+########################################
+FROM debian:bullseye-slim AS source
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+RUN git clone --depth 1 --branch release-3.9.2 \
+      https://github.com/kivitendo/kivitendo-erp.git \
+    && rm -rf /opt/kivitendo-erp/.git
+
+
+########################################
+# Stage 2: runtime image
+########################################
+FROM debian:bullseye-slim
 
 LABEL maintainer="your-email@example.com"
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
+# Runtime dependencies: Apache, Perl modules and the PostgreSQL *client*.
+# The database itself runs in a separate container (see docker-compose.yml),
+# so the full postgresql server + contrib are NOT installed here.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     apache2 libapache2-mod-fcgid \
     libarchive-zip-perl libclone-perl \
     libconfig-std-perl libdatetime-perl libdbd-pg-perl libdbi-perl \
@@ -14,8 +37,8 @@ RUN apt-get update && apt-get install -y \
     libstring-shellquote-perl libtemplate-perl libtext-csv-xs-perl \
     libtext-iconv-perl liburi-perl libxml-writer-perl libyaml-perl \
     libimage-info-perl libgd-gd2-perl libfile-copy-recursive-perl \
-    postgresql libalgorithm-checkdigits-perl libcrypt-pbkdf2-perl git \
-    libcgi-pm-perl libtext-unidecode-perl libwww-perl postgresql-contrib \
+    postgresql-client libalgorithm-checkdigits-perl libcrypt-pbkdf2-perl \
+    libcgi-pm-perl libtext-unidecode-perl libwww-perl \
     poppler-utils libhtml-restrict-perl libdatetime-set-perl \
     libset-infinite-perl liblist-utilsby-perl libdaemon-generic-perl \
     libfile-flock-perl libfile-slurp-perl libfile-mimeinfo-perl \
@@ -26,25 +49,26 @@ RUN apt-get update && apt-get install -y \
     libmail-imapclient-perl libuuid-tiny-perl libcryptx-perl locales \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Latex and related tools    
-RUN apt-get update && apt-get install -y texlive-base-bin texlive-latex-recommended texlive-fonts-recommended \
-    texlive-latex-extra texlive-lang-german ghostscript latexmk
-
+# LaTeX toolchain for PDF generation.
+# --no-install-recommends skips the huge texlive-*-doc packages (~500 MB)
+# while keeping full LaTeX functionality.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    texlive-latex-recommended texlive-fonts-recommended \
+    texlive-latex-extra texlive-plain-generic texlive-lang-german \
+    ghostscript latexmk \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set locale
 RUN sed -i '/de_DE.UTF-8/s/^# //g' /etc/locale.gen && \
     locale-gen
-ENV LANG de_DE.UTF-8
-ENV LANGUAGE de_DE:de
-ENV LC_ALL de_DE.UTF-8
-
-WORKDIR /opt
-
-# Clone kivitendo
-RUN git clone --depth 1 --branch release-3.9.2 https://github.com/davidwuest/kivitendo-erp.git
-
+ENV LANG=de_DE.UTF-8
+ENV LANGUAGE=de_DE:de
+ENV LC_ALL=de_DE.UTF-8
 
 WORKDIR /opt/kivitendo-erp
+
+# Kivitendo source from the build stage (without .git history)
+COPY --from=source /opt/kivitendo-erp /opt/kivitendo-erp
 
 # Apache Konfiguration kopieren
 COPY apache-kivitendo.conf /etc/apache2/sites-available/000-default.conf
@@ -52,11 +76,9 @@ COPY apache-kivitendo.conf /etc/apache2/sites-available/000-default.conf
 # Copy Kivitendo configuration
 COPY kivitendo.conf /opt/kivitendo-erp/config/kivitendo.conf
 
-# Dispatcher ausführbar machen
-RUN chmod +x /opt/kivitendo-erp/dispatcher.fcgi
-
-# Apache mod_fcgid aktivieren
-RUN a2enmod fcgid
+# Dispatcher ausführbar machen + Apache mod_fcgid aktivieren
+RUN chmod +x /opt/kivitendo-erp/dispatcher.fcgi && \
+    a2enmod fcgid
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
