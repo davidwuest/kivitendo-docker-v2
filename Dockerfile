@@ -93,6 +93,11 @@ COPY kivitendo.conf /opt/kivitendo-erp/config/kivitendo.conf
 RUN chmod +x /opt/kivitendo-erp/dispatcher.fcgi && \
     a2enmod fcgid
 
+# Runtime helper: override any kivitendo.conf setting from the environment
+# (KIVI_<SECTION>__<KEY>), for Kubernetes/12-factor deployments.
+COPY docker/apply-env-config.pl /usr/local/bin/apply-env-config.pl
+RUN perl -c /usr/local/bin/apply-env-config.pl
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

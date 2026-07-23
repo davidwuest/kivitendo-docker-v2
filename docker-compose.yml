@@ -1,16 +1,17 @@
 services:
-  # Local PostgreSQL — opt-in only. Neon is the default DB provider.
-  # Start it with:  docker compose --profile local-db up
+  # Local PostgreSQL. Runs only when DB_BACKEND=postgres, because
+  # COMPOSE_PROFILES is set to ${DB_BACKEND} in .env and this service carries
+  # the "postgres" profile. For DB_BACKEND=neon-postgres it stays stopped.
   db:
     image: postgres:13
     container_name: kivitendo-db
-    profiles: ["local-db"]
+    profiles: ["postgres"]
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: kivitendo
-      POSTGRES_PASSWORD: kivitendo
-      POSTGRES_DB: kivitendo
+      POSTGRES_USER: ${DB_USER:-kivitendo}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-kivitendo}
+      POSTGRES_DB: ${DB_NAME:-kivitendo}
     volumes:
       - db_data:/var/lib/postgresql/data
     networks:
@@ -21,11 +22,16 @@ services:
     container_name: kivitendo-erp
     ports:
       - "82:80"
-    # Neon connection + credentials (gitignored). The entrypoint renders the
-    # [authentication/database] section of kivitendo.conf from these vars,
-    # and PGSSLMODE is read by libpq for every connection.
-    env_file:
-      - dev/neon.env
+    # The database backend and connection come from ./.env (see .env.*.example).
+    # The entrypoint applies local defaults when DB_BACKEND=postgres and renders
+    # kivitendo.conf from these values.
+    environment:
+      DB_BACKEND: ${DB_BACKEND:-postgres}
+      DB_HOST: ${DB_HOST:-}
+      DB_PORT: ${DB_PORT:-}
+      DB_NAME: ${DB_NAME:-}
+      DB_USER: ${DB_USER:-}
+      DB_PASSWORD: ${DB_PASSWORD:-}
     volumes:
       - webdav:/opt/kivitendo-erp/webdav
       - ./druckvorlagen:/opt/kivitendo-erp/templates/cvs
