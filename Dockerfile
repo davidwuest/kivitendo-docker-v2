@@ -70,6 +70,17 @@ WORKDIR /opt/kivitendo-erp
 # Kivitendo source from the build stage (without .git history)
 COPY --from=source /opt/kivitendo-erp /opt/kivitendo-erp
 
+# Neon compatibility patches (DSN sslmode/endpoint injection + accepting a
+# CREATEDB role for dataset creation). See the script header for rationale.
+# Both are inert/safe for a normal or local PostgreSQL.
+COPY docker/patch-neon-compat.pl /tmp/patch-neon-compat.pl
+RUN perl /tmp/patch-neon-compat.pl \
+    && perl -c -I/opt/kivitendo-erp /opt/kivitendo-erp/SL/DBConnect.pm \
+    && perl -c -I/opt/kivitendo-erp /opt/kivitendo-erp/SL/DBUtils.pm \
+    && perl -c -I/opt/kivitendo-erp /opt/kivitendo-erp/SL/Controller/Admin.pm \
+    && perl -c -I/opt/kivitendo-erp /opt/kivitendo-erp/SL/User.pm \
+    && rm /tmp/patch-neon-compat.pl
+
 # Apache Konfiguration kopieren
 COPY apache-kivitendo.conf /etc/apache2/sites-available/000-default.conf
 
