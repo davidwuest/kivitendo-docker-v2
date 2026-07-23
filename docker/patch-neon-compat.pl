@@ -17,29 +17,67 @@
 use strict;
 use warnings;
 
-# --- Patch 1: DSN injection in SL::DBConnect::_connect ----------------------
+# --- Patch 1: rewrite SL::DBConnect::_connect for Neon ----------------------
+# Inject TLS + the SNI-fallback endpoint + a generous connect_timeout into the
+# DSN, and retry the connection so a Neon scale-to-zero cold start (the compute
+# waking from suspend) is tolerated instead of surfacing as an error. All
+# self-gating on *.neon.tech, so a normal/local PostgreSQL is untouched.
 {
     my $file = '/opt/kivitendo-erp/SL/DBConnect.pm';
     my $src  = slurp($file);
 
-    if ($src =~ /options=endpoint/) {
-        print "SL::DBConnect DSN patch: already present\n";
+    if ($src =~ /Neon scale-to-zero/) {
+        print "SL::DBConnect Neon _connect patch: already present\n";
     } else {
-        my $inject = <<'PERL';
+        my $new_connect = <<'PERL';
+sub _connect {
+  my ($self, @args) = @_;
 
-  # Neon: inject TLS + SNI-fallback endpoint straight into the DSN.
-  if (defined $args[0] && $args[0] =~ m/host=([A-Za-z0-9._-]*\.neon\.tech)/) {
+  # Neon: inject TLS, the SNI-fallback endpoint (bullseye libpq predates SNI),
+  # and a generous connect_timeout straight into the DSN.
+  my $is_neon = defined $args[0] && $args[0] =~ m/host=([A-Za-z0-9._-]*\.neon\.tech)/;
+  if ($is_neon) {
     (my $endpoint = $1) =~ s/\..*//;
     $args[0] .= ";sslmode=require"            unless $args[0] =~ /sslmode=/;
     $args[0] .= ";options=endpoint=$endpoint" unless $args[0] =~ /options=/;
+    $args[0] .= ";connect_timeout=20"         unless $args[0] =~ /connect_timeout=/;
   }
+
+  my $do_connect = sub {
+    return DBI->connect(@args) unless $::lx_office_conf{debug} && $::lx_office_conf{debug}->{dbix_log4perl};
+
+    require Log::Log4perl;
+    require DBIx::Log4perl;
+
+    my $filename =  $::lxdebug->file;
+    my $config   =  $::lx_office_conf{debug}->{dbix_log4perl_config};
+    $config      =~ s/LXDEBUGFILE/${filename}/g;
+
+    Log::Log4perl->init(\$config);
+    return DBIx::Log4perl->connect(@args);
+  };
+
+  return $do_connect->() unless $is_neon;
+
+  # Neon scale-to-zero: the compute may be suspended and take several seconds to
+  # wake. Retry a handful of times so a cold start is tolerated, not thrown.
+  my ($dbh, $err);
+  for my $try (1 .. 5) {
+    $dbh = eval { $do_connect->() };
+    $err = $@;
+    last if $dbh;
+    $::lxdebug->message(0, "Neon DB connect attempt $try failed, retrying in 3s: $err") if $::lxdebug;
+    sleep 3;
+  }
+  die $err if !$dbh && $err;
+  return $dbh;
+}
 PERL
-        # Inline replacement so $1 (the captured signature) and $inject both
-        # interpolate correctly.
-        $src =~ s{(sub _connect \{\n\s*my \(\$self, \@args\) = \@_;\n)}{$1$inject}
-            or die "SL::DBConnect DSN patch: _connect signature not found\n";
+        chomp $new_connect;
+        $src =~ s{^sub _connect \{.*?^\}$}{$new_connect}sm
+            or die "SL::DBConnect Neon _connect patch: _connect sub not found\n";
         spew($file, $src);
-        print "SL::DBConnect DSN patch: applied\n";
+        print "SL::DBConnect Neon _connect patch: applied\n";
     }
 }
 
@@ -56,6 +94,33 @@ PERL
             or die "SL::DBUtils::role_is_superuser CREATEDB patch: query not found\n";
         spew($file, $src);
         print "SL::DBUtils::role_is_superuser CREATEDB patch: applied\n";
+    }
+}
+
+# --- Patch 5: evict dead cached handles after a Neon cold start -------------
+# SL::DBConnect::Cache->get reuses a cached handle as long as DBI marks it
+# {Active}. But after Neon scales to zero the compute drops the connection
+# server-side while DBI still thinks it is Active, so the stale handle gets
+# reused and the next query fails with "no connection to the server". For Neon
+# hosts, ping the cached handle and evict it if it is really dead, so connect()
+# falls through to a fresh (retrying) _connect. Gated on *.neon.tech.
+{
+    my $file = '/opt/kivitendo-erp/SL/DBConnect/Cache.pm';
+    my $src  = slurp($file);
+
+    if ($src =~ /Neon.*ping/s) {
+        print "SL::DBConnect::Cache Neon ping patch: already present\n";
+    } else {
+        my $replacement = <<'PERL';
+  # Neon scale-to-zero: ping so a server-side-dropped handle is evicted, not reused.
+  my $is_neon = defined $args[0] && $args[0] =~ /\.neon\.tech/;
+  if (!$dbh->{Active} || ($dbh && $is_neon && !eval { $dbh->ping })) {
+PERL
+        chomp $replacement;
+        $src =~ s{^  if \(!\$dbh->\{Active\}\) \{$}{$replacement}m
+            or die "SL::DBConnect::Cache Neon ping patch: get() guard not found\n";
+        spew($file, $src);
+        print "SL::DBConnect::Cache Neon ping patch: applied\n";
     }
 }
 
@@ -100,6 +165,39 @@ PERL
             or die "Admin.pm test-connection routing patch: DBI->connect call not found\n";
         spew($file, $src);
         print "Admin.pm test-connection routing patch: applied\n";
+    }
+}
+
+# --- Patch 6: heal SL::Auth's cached handle after a Neon cold start ---------
+# SL::Auth caches its own $self->{dbh} and dbconnect() returns it directly,
+# bypassing SL::DBConnect::Cache (and its ping). Long-lived FCGI workers
+# (FcgidMinProcessesPerClass keeps some alive indefinitely) therefore reuse a
+# handle that Neon dropped when it scaled to zero, and the next auth/session
+# query fails with "no connection to the server". For Neon hosts, ping the
+# cached handle and drop it if dead so dbconnect() reconnects. Gated on
+# *.neon.tech, so a normal/local PostgreSQL is untouched.
+{
+    my $file = '/opt/kivitendo-erp/SL/Auth.pm';
+    my $src  = slurp($file);
+
+    if ($src =~ /\$self->\{dbh\}->ping/) {
+        print "SL::Auth::dbconnect Neon ping patch: already present\n";
+    } else {
+        my $replacement = <<'PERL';
+  if ($self->{dbh}) {
+    # Neon scale-to-zero: the cached auth handle may be dead after the compute
+    # suspended (DBI still marks it Active); ping and drop it so we reconnect.
+    my $auth_host = $self->{DB_config} ? ($self->{DB_config}->{host} // '') : '';
+    return $self->{dbh} if $auth_host !~ /\.neon\.tech/ || eval { $self->{dbh}->ping };
+    eval { $self->{dbh}->disconnect };
+    delete $self->{dbh};
+  }
+PERL
+        chomp $replacement;
+        $src =~ s{  if \(\$self->\{dbh\}\) \{\n    return \$self->\{dbh\};\n  \}}{$replacement}
+            or die "SL::Auth::dbconnect Neon ping patch: cached-dbh guard not found\n";
+        spew($file, $src);
+        print "SL::Auth::dbconnect Neon ping patch: applied\n";
     }
 }
 

@@ -79,6 +79,8 @@ RUN perl /tmp/patch-neon-compat.pl \
     && perl -c -I/opt/kivitendo-erp /opt/kivitendo-erp/SL/DBUtils.pm \
     && perl -c -I/opt/kivitendo-erp /opt/kivitendo-erp/SL/Controller/Admin.pm \
     && perl -c -I/opt/kivitendo-erp /opt/kivitendo-erp/SL/User.pm \
+    && perl -c -I/opt/kivitendo-erp /opt/kivitendo-erp/SL/DBConnect/Cache.pm \
+    && perl -c -I/opt/kivitendo-erp /opt/kivitendo-erp/SL/Auth.pm \
     && rm /tmp/patch-neon-compat.pl
 
 # Apache Konfiguration kopieren
